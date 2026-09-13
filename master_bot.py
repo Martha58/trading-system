@@ -22,8 +22,11 @@ ENABLE_TELEGRAM    = True
 
 def main():
     log.info("Initializing MT5 container connections...")
-    if not initialize_mt5():
-        return
+    
+    # Wait in a loop for MT5 container socket to be online
+    while not initialize_mt5():
+        log.info("Waiting 5 seconds for MT5 socket server to become available...")
+        time.sleep(5)
     
     telegram_bot = create_telegram_bot_from_env() if ENABLE_TELEGRAM else None
     if telegram_bot:
