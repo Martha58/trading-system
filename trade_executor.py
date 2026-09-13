@@ -18,13 +18,14 @@ SYMBOL_MAP = {
 }
 
 def get_container_mt5(host_env: str, default_host: str, port_env: str, default_port: int):
-    """Establishes an RPyC connection to the MT5 instance in a target container."""
+    """Connects to the MT5 container via RPyC classic and imports MetaTrader5 remotely."""
     host = os.getenv(host_env, default_host)
     port = int(os.getenv(port_env, default_port))
     try:
-        conn = rpyc.connect(host, port, config={"allow_public_attrs": True, "sync_request_timeout": 30})
-        # Access the MetaTrader5 package loaded in the remote container environment
-        return conn.modules.MetaTrader5
+        # rpyc.classic connects directly to the container's slave server and grants access to remote modules
+        conn = rpyc.classic.connect(host, port)
+        mt5_remote = conn.modules.MetaTrader5
+        return mt5_remote
     except Exception as err:
         log.warning("MT5 container socket at %s:%d not ready yet - %s", host, port, err)
         return None
