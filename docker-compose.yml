@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  mt5-fxpro:
+    image: gmag11/metatrader5_vnc:latest
+    container_name: mt5_fxpro
+    restart: always
+    ports:
+      - "3000:3000"   # Browser VNC interface (for manual setup/login)
+      - "8001:8001"   # mt5linux IPC API Port
+    environment:
+      - CUSTOM_USER=${CONTAINER_USER}
+      - PASSWORD=${VNC_PASSWORD}
+    volumes:
+      - ./mt5_fxpro_data:/config
+
+  mt5-nairafunded:
+    image: gmag11/metatrader5_vnc:latest
+    container_name: mt5_nairafunded
+    restart: always
+    ports:
+      - "3001:3000"   # Browser VNC interface (separate port)
+      - "8002:8001"   # mt5linux IPC API Port (separate port)
+    environment:
+      - CUSTOM_USER=${CONTAINER_USER}
+      - PASSWORD=${VNC_PASSWORD}
+    volumes:
+      - ./mt5_nairafunded_data:/config
+
+  mt5-nairatrader:
+    image: gmag11/metatrader5_vnc:latest
+    container_name: mt5_nairatrader
+    restart: always
+    ports:
+      - "3002:3000"   # Browser VNC interface (separate port)
+      - "8003:8001"   # mt5linux IPC API Port (separate port)
+    environment:
+      - CUSTOM_USER=${CONTAINER_USER}
+      - PASSWORD=${VNC_PASSWORD}
+    volumes:
+      - ./mt5_nairatrader_data:/config
+
+  trading-bot:
+    build: .
+    container_name: wickless_bot
+    restart: always
+    depends_on:
+      - mt5-fxpro
+      - mt5-nairafunded
+      - mt5-nairatrader
+    environment:
+      - FXPRO_HOST=mt5-fxpro
+      - FXPRO_PORT=8001
+      - NAIRAFUNDED_HOST=mt5-nairafunded
+      - NAIRAFUNDED_PORT=8001
+      - NAIRATRADER_HOST=mt5-nairatrader
+      - NAIRATRADER_PORT=8001
