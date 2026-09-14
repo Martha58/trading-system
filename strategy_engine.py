@@ -359,7 +359,7 @@ class WicklessCandleBot:
                     self._known_zone_keys.add(key)
                     # Only print spot logs when live_mode is active (new candles forming live)
                     if self.live_mode:
-                        log.info("✨ [%s] NEW Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts_str)
+                        log.info("[%s] Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts)
 
         self._expire_stale_zones(closed_df)
         latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
