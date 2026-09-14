@@ -46,8 +46,11 @@ class Zone:
         self.source_ts = source_ts
         self.active    = True
 
+    def age(self, current_idx: int) -> int:
+        return current_idx - self.bar_idx
+
 class Trade:
-    def __init__(self, symbol, direction, entry, sl, tp, timestamp, trend, zone=None, telegram_targets=None):
+    def __init__(self, symbol, direction, entry, sl, tp, timestamp, trend, telegram_targets=None):
         self.symbol           = symbol
         self.direction        = direction
         self.entry            = entry
@@ -58,7 +61,6 @@ class Trade:
         self.result           = None
         self.pnl_pts          = None
         self.trend            = trend
-        self.zone             = zone
         self.telegram_targets = telegram_targets or ["3"]
 
     def close(self, price, timestamp, reason):
@@ -76,10 +78,10 @@ class Trade:
 class WicklessCandleBot:
     def __init__(self, symbol: str, telegram_bot: TelegramSignalBot = None):
         self.symbol           = symbol
-        self.zones            : list[Zone]   = []
+        self.zones            : list[Zone]  = []
         self.open_trade       : Trade | None = None
-        self.closed_trades    : list[Trade]  = []
-        self._consumed_ts     : set          = set() # Tracks used/expired zone timestamps permanently
+        self.closed_trades    : list[Trade] = []
+        self._known_zone_keys : set         = set()
         self.live_mode        = False
         self.telegram         = telegram_bot
 
@@ -135,7 +137,7 @@ class WicklessCandleBot:
                 for zone in bt_zones:
                     if not zone.active:
                         continue
-                    if (i - zone.bar_idx) > MAX_ZONE_AGE:
+                    if zone.age(i) > MAX_ZONE_AGE:
                         zone.active = False
                         continue
                     if zone.direction == "long" and trend == "down":
@@ -248,15 +250,20 @@ class WicklessCandleBot:
 
         latest_pos = len(closed_df) - 1
 
-        for zone in list(self.zones):
+        for zone in self.zones:
             if not zone.active:
                 continue
 
-            age = latest_pos - zone.bar_idx
+            try:
+                zone_pos = closed_df.index.get_loc(zone.source_ts)
+                age = latest_pos - zone_pos
+            except KeyError:
+                zone.active = False
+                continue
+
             if age > MAX_ZONE_AGE:
                 zone.active = False
-                self._consumed_ts.add(zone.source_ts)
-                log.info("[%s] ⏰ Zone at %.2f expired (Age: %d candles)", self.symbol, zone.price, age)
+                log.info("[%s] 🚫 Zone at %.2f expired (Age: %d candles)", self.symbol, zone.price, age)
                 continue
 
             if zone.direction == "long" and trend == "down":
@@ -269,21 +276,31 @@ class WicklessCandleBot:
                 sl = zone.price - zone.atr * SL_ATR_MULT
                 tp = zone.price + (zone.price - sl)
                 
-                telegram_targets = ["3"]
+                # Determine Telegram destinations
+                telegram_targets = ["3"]  # Auto-trade channel 3 always receives GOLD & SILVER trades
                 if self.symbol.upper() == "GOLD":
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
+                    else:
+                        if not is_london_or_ny_session():
+                            log.info("[%s] Skipping Telegram Channels 1 & 2: Outside London/NY session", self.symbol)
+                        if self.daily_losses >= 2:
+                            log.info("[%s] Skipping Telegram Channels 1 & 2: Daily 2-loss limit reached", self.symbol)
+                else:
+                    log.info("[%s] Skipping Telegram Channels 1 & 2: Only GOLD trades are sent to Channels 1 & 2", self.symbol)
 
+                self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
                 zone.active = False
-                self._consumed_ts.add(zone.source_ts)
-
-                self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
-                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone consumed)",
+                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
+                # 1. ALWAYS execute on MT5 Live Account (GOLD only)
                 if self.symbol.upper() == "GOLD":
-                    execute_multi_account_trades(self.symbol, "long", LOT_SIZE, sl, tp)
+                    execute_mt5_trade(self.symbol, "long", LOT_SIZE, sl, tp)
+                else:
+                    log.info("[%s] Skipping MT5 Auto-Trade Execution: Only GOLD is enabled for automated trading", self.symbol)
 
+                # 2. Dispatch Telegram Signal
                 if self.telegram:
                     self.telegram.notify_signal(
                         symbol=self.symbol, direction="long", entry=zone.price, sl=sl, tp=tp, trend=trend, timestamp=ts, targets=telegram_targets
@@ -295,61 +312,71 @@ class WicklessCandleBot:
                 sl = zone.price + zone.atr * SL_ATR_MULT
                 tp = zone.price - (sl - zone.price)
                 
-                telegram_targets = ["3"]
+                # Determine Telegram destinations
+                telegram_targets = ["3"]  # Auto-trade channel 3 always receives GOLD & SILVER trades
                 if self.symbol.upper() == "GOLD":
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
+                    else:
+                        if not is_london_or_ny_session():
+                            log.info("[%s] Skipping Telegram Channels 1 & 2: Outside London/NY session", self.symbol)
+                        if self.daily_losses >= 2:
+                            log.info("[%s] Skipping Telegram Channels 1 & 2: Daily 2-loss limit reached", self.symbol)
+                else:
+                    log.info("[%s] Skipping Telegram Channels 1 & 2: Only GOLD trades are sent to Channels 1 & 2", self.symbol)
 
+                self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
                 zone.active = False
-                self._consumed_ts.add(zone.source_ts)
-
-                self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
-                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone consumed)",
+                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
+                # 1. ALWAYS execute on MT5 Live Account (GOLD only)
                 if self.symbol.upper() == "GOLD":
-                    execute_multi_account_trades(self.symbol, "short", LOT_SIZE, sl, tp)
+                    execute_mt5_trade(self.symbol, "short", LOT_SIZE, sl, tp)
+                else:
+                    log.info("[%s] Skipping MT5 Auto-Trade Execution: Only GOLD is enabled for automated trading", self.symbol)
 
+                # 2. Dispatch Telegram Signal
                 if self.telegram:
                     self.telegram.notify_signal(
                         symbol=self.symbol, direction="short", entry=zone.price, sl=sl, tp=tp, trend=trend, timestamp=ts, targets=telegram_targets
                     )
                 break
 
+    def _expire_stale_zones(self, closed_df: pd.DataFrame):
+        if len(closed_df) == 0:
+            return
+        latest_pos = len(closed_df) - 1
+        for zone in self.zones:
+            if not zone.active:
+                continue
+            try:
+                zone_pos = closed_df.index.get_loc(zone.source_ts)
+            except KeyError:
+                zone.active = False
+                continue
+            if (latest_pos - zone_pos) > MAX_ZONE_AGE:
+                zone.active = False
+
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):
         atr = compute_atr(df, ATR_PERIOD)
         ema_fast, ema_slow = compute_emas(df)
         
         closed_df = df.iloc[:-1]
-        latest_pos = len(closed_df) - 1
-
-        # Re-build active zones strictly from current dataframe state to prevent duplicates
-        new_active_zones: list[Zone] = []
-        
         for i, (ts, row) in enumerate(closed_df.iterrows()):
-            # Skip if this timestamp was already consumed by an entry or max-age expiration
-            if ts in self._consumed_ts:
-                continue
-
             a = atr.iloc[i]
             for direction, detector in [("long", is_bullish_wickless), ("short", is_bearish_wickless)]:
+                key = (ts, direction)
+                if key in self._known_zone_keys:
+                    continue
                 if detector(row, WICK_TOLERANCE_PCT):
-                    age = latest_pos - i
-                    if age <= MAX_ZONE_AGE:
-                        zone = Zone(row["open"], direction, i, a, ts)
-                        new_active_zones.append(zone)
-                        
-                        # Log ONLY if a brand-new live candle just closed
-                        if self.live_mode and age == 0 and ts not in getattr(self, "_logged_live_ts", set()):
-                            if not hasattr(self, "_logged_live_ts"):
-                                self._logged_live_ts = set()
-                            self._logged_live_ts.add(ts)
-                            log.info("✨ [%s] NEW Wickless candle zone formed at %.2f (%s on %s)", 
-                                     self.symbol, row['open'], direction.upper(), ts)
+                    self.zones.append(Zone(row["open"], direction, i, a, ts))
+                    self._known_zone_keys.add(key)
+                    log.info("[%s] Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts)
 
-        self.zones = new_active_zones
-
+        self._expire_stale_zones(closed_df)
         latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         ef = ema_fast.iloc[-1]
         es = ema_slow.iloc[-1]
         trend = get_trend(ef, es, live_price)
@@ -360,6 +387,7 @@ class WicklessCandleBot:
         if not self.open_trade and self.live_mode:
             self._check_entries_live(live_price, latest_ts, closed_df, trend, news_blocked)
 
+        # Explicit active trade status logger across MT5 & Telegram Channels
         if self.open_trade:
             mt5_status = "RUNNING" if self.symbol.upper() == "GOLD" else "SKIPPED (GOLD ONLY)"
             ch1_2_status = "ACTIVE" if (self.symbol.upper() == "GOLD" and is_london_or_ny_session() and self.daily_losses < 2) else "PAUSED/OFF-SESSION/DISABLED"
