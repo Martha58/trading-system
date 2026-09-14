@@ -363,26 +363,16 @@ class WicklessCandleBot:
         ema_fast, ema_slow = compute_emas(df)
         
         closed_df = df.iloc[:-1]
-        latest_idx = len(closed_df) - 1
-
         for i, (ts, row) in enumerate(closed_df.iterrows()):
             a = atr.iloc[i]
-            # Convert timestamp to a standard ISO string to prevent key mismatch
-            ts_str = ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
-
             for direction, detector in [("long", is_bullish_wickless), ("short", is_bearish_wickless)]:
-                key = (ts_str, direction)
+                key = (ts, direction)
                 if key in self._known_zone_keys:
                     continue
-                
                 if detector(row, WICK_TOLERANCE_PCT):
                     self.zones.append(Zone(row["open"], direction, i, a, ts))
                     self._known_zone_keys.add(key)
-                    
-                    # ONLY log when a fresh candle closes during LIVE monitoring
-                    if self.live_mode and i == latest_idx:
-                        log.info("✨ [%s] NEW Wickless candle zone spotted at %.2f (%s on %s)", 
-                                 self.symbol, row['open'], direction.upper(), ts_str)
+                    log.info("[%s] Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts)
 
         self._expire_stale_zones(closed_df)
         latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -397,6 +387,7 @@ class WicklessCandleBot:
         if not self.open_trade and self.live_mode:
             self._check_entries_live(live_price, latest_ts, closed_df, trend, news_blocked)
 
+        # Explicit active trade status logger across MT5 & Telegram Channels
         if self.open_trade:
             mt5_status = "RUNNING" if self.symbol.upper() == "GOLD" else "SKIPPED (GOLD ONLY)"
             ch1_2_status = "ACTIVE" if (self.symbol.upper() == "GOLD" and is_london_or_ny_session() and self.daily_losses < 2) else "PAUSED/OFF-SESSION/DISABLED"
