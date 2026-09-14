@@ -18,24 +18,29 @@ SYMBOL_MAP = {
     "NairaTrader": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"},  # Update if NairaTrader uses XAUUSDm / GOLD.m
 }
 
-def get_container_mt5(host_env: str, default_host: str, port_env: str, default_port: int):
-    """Establishes an RPyC classic connection and imports MetaTrader5 remotely."""
+def get_container_connection(host_env: str, default_host: str, port_env: str, default_port: int):
+    """Establishes RPyC connection and returns both the connection and remote MT5 module."""
     host = os.getenv(host_env, default_host)
     port = int(os.getenv(port_env, default_port))
     try:
         conn = rpyc.classic.connect(host, port)
         mt5_remote = conn.builtins.__import__("MetaTrader5")
-        return mt5_remote
+        return conn, mt5_remote
     except Exception as err:
         log.warning("MT5 container socket at %s:%d not ready yet - %s", host, port, err)
-        return None
+        return None, None
+
+def get_container_mt5(host_env: str, default_host: str, port_env: str, default_port: int):
+    """Backwards-compatible helper returning MT5 module proxy."""
+    _, mt5_remote = get_container_connection(host_env, default_host, port_env, default_port)
+    return mt5_remote
 
 def execute_container_trade(account_label: str, host_env: str, default_host: str, port_env: str, default_port: int,
                             symbol: str, direction: str, volume: float, sl: float, tp: float) -> bool:
-    """Executes a market deal on a specific MT5 container with primitive type casting."""
-    mt5_instance = get_container_mt5(host_env, default_host, port_env, default_port)
+    """Executes a market deal on a specific MT5 container with native remote dictionary casting."""
+    conn, mt5_instance = get_container_connection(host_env, default_host, port_env, default_port)
     
-    if mt5_instance is None:
+    if conn is None or mt5_instance is None:
         log.error("❌ Trade aborted for %s: MT5 container socket connection unavailable", account_label)
         return False
 
@@ -65,14 +70,14 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
     stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
     if direction == "long":
-        order_type = mt5_instance.ORDER_TYPE_BUY
+        order_type = int(mt5_instance.ORDER_TYPE_BUY)
         price = float(tick.ask)
         if sl >= price:
             sl = price - (1.0 if point == 0.01 else 100 * point)
         if (price - sl) < stop_level:
             sl = price - stop_level - (10 * point)
     else:  # short
-        order_type = mt5_instance.ORDER_TYPE_SELL
+        order_type = int(mt5_instance.ORDER_TYPE_SELL)
         price = float(tick.bid)
         if sl <= price:
             sl = price + (1.0 if point == 0.01 else 100 * point)
@@ -85,14 +90,14 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
 
     filling_mode = int(symbol_info.filling_mode)
     if filling_mode & 1:
-        filling_type = mt5_instance.ORDER_FILLING_FOK
+        filling_type = int(mt5_instance.ORDER_FILLING_FOK)
     elif filling_mode & 2:
-        filling_type = mt5_instance.ORDER_FILLING_IOC
+        filling_type = int(mt5_instance.ORDER_FILLING_IOC)
     else:
-        filling_type = mt5_instance.ORDER_FILLING_RETURN
+        filling_type = int(mt5_instance.ORDER_FILLING_RETURN)
 
-    # Force all dictionary parameters to native Python primitives for RPyC serialization
-    request = {
+    # Primitive Python dictionary
+    local_req = {
         "action": int(mt5_instance.TRADE_ACTION_DEAL),
         "symbol": str(broker_symbol),
         "volume": float(volume),
@@ -107,8 +112,10 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
         "type_filling": int(filling_type),
     }
 
-    remote_dict = mt5_instance._conn.builtins.dict(request)
+    # Pass native dict created via the active RPyC connection `conn`
+    remote_dict = conn.builtins.dict(local_req)
     result = mt5_instance.order_send(remote_dict)
+
     if result is None or int(result.retcode) != int(mt5_instance.TRADE_RETCODE_DONE):
         ret_code = int(result.retcode) if result else "None"
         ret_comment = str(result.comment) if result else "No Response"
