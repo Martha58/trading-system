@@ -5,6 +5,9 @@ from data_extraction import initialize_mt5, fetch_ohlc_mt5
 from trade_executor import get_current_price_mt5
 from news_filter import get_high_impact_news_status
 from strategy_engine import WicklessCandleBot
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
