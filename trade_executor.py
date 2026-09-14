@@ -107,7 +107,8 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
         "type_filling": int(filling_type),
     }
 
-    result = mt5_instance.order_send(request)
+    remote_dict = mt5_instance._conn.builtins.dict(request)
+    result = mt5_instance.order_send(remote_dict)
     if result is None or int(result.retcode) != int(mt5_instance.TRADE_RETCODE_DONE):
         ret_code = int(result.retcode) if result else "None"
         ret_comment = str(result.comment) if result else "No Response"
