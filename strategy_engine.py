@@ -296,7 +296,7 @@ class WicklessCandleBot:
                 
                 # 1. ALWAYS execute on MT5 Live Account (GOLD only)
                 if self.symbol.upper() == "GOLD":
-                    execute_mt5_trade(self.symbol, "long", LOT_SIZE, sl, tp)
+                    execute_multi_account_trades(self.symbol, "long", LOT_SIZE, sl, tp)
                 else:
                     log.info("[%s] Skipping MT5 Auto-Trade Execution: Only GOLD is enabled for automated trading", self.symbol)
 
@@ -332,7 +332,7 @@ class WicklessCandleBot:
                 
                 # 1. ALWAYS execute on MT5 Live Account (GOLD only)
                 if self.symbol.upper() == "GOLD":
-                    execute_mt5_trade(self.symbol, "short", LOT_SIZE, sl, tp)
+                    execute_multi_account_trades(self.symbol, "short", LOT_SIZE, sl, tp)
                 else:
                     log.info("[%s] Skipping MT5 Auto-Trade Execution: Only GOLD is enabled for automated trading", self.symbol)
 
