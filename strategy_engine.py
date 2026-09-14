@@ -325,21 +325,19 @@ class WicklessCandleBot:
                 break
 
     def _expire_stale_zones(self, closed_df: pd.DataFrame):
-        if len(closed_df) == 0:
-            return
-        latest_pos = len(closed_df) - 1
-        for zone in self.zones:
-            if not zone.active:
-                continue
-            try:
-                zone_pos = closed_df.index.get_loc(zone.source_ts)
-                age = latest_pos - zone_pos
-                if age > MAX_ZONE_AGE:
+            if len(closed_df) == 0:
+                return
+            latest_pos = len(closed_df) - 1
+            for zone in self.zones:
+                if not zone.active:
+                    continue
+                try:
+                    zone_pos = closed_df.index.get_loc(zone.source_ts)
+                except KeyError:
                     zone.active = False
-                    log.info("[%s] ⏰ Zone at %.2f expired (Reached max age %d candles)", self.symbol, zone.price, age)
-            except KeyError:
-                zone.active = False
-                log.info("[%s] 🚫 Zone at %.2f invalidated (Out of DataFrame window)", self.symbol, zone.price)
+                    continue
+                if (latest_pos - zone_pos) > MAX_ZONE_AGE:
+                    zone.active = False
 
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):
         atr = compute_atr(df, ATR_PERIOD)
