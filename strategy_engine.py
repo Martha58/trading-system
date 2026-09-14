@@ -50,7 +50,7 @@ class Zone:
         return current_idx - self.bar_idx
 
 class Trade:
-    def __init__(self, symbol, direction, entry, sl, tp, timestamp, trend, telegram_targets=None):
+    def __init__(self, symbol, direction, entry, sl, tp, timestamp, trend, zone=None, telegram_targets=None):
         self.symbol           = symbol
         self.direction        = direction
         self.entry            = entry
@@ -61,6 +61,7 @@ class Trade:
         self.result           = None
         self.pnl_pts          = None
         self.trend            = trend
+        self.zone             = zone
         self.telegram_targets = telegram_targets or ["3"]
 
     def close(self, price, timestamp, reason):
@@ -281,9 +282,11 @@ class WicklessCandleBot:
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
 
-                self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
+                # Deactivate the zone so it can NEVER trigger another trade or signal
                 zone.active = False
-                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
+
+                self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
+                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone deactivated)",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
                 if self.symbol.upper() == "GOLD":
@@ -305,9 +308,11 @@ class WicklessCandleBot:
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
 
-                self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
+                # Deactivate the zone so it can NEVER trigger another trade or signal
                 zone.active = False
-                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
+
+                self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
+                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone deactivated)",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
                 if self.symbol.upper() == "GOLD":
