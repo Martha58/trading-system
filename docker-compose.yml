@@ -42,6 +42,8 @@ services:
     build: .
     container_name: wickless_bot
     restart: always
+    env_file:
+      - .env
     depends_on:
       - mt5-fxpro
       - mt5-nairafunded
