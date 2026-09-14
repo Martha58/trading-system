@@ -13,9 +13,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# USER SETTINGS
 SYMBOLS            = ["GOLD", "SILVER"]
-INTERVAL           = 15  # M15 timeframe constant
+INTERVAL           = 15
 OUTPUTSIZE         = 200
 POLL_SECONDS       = 5
 ENABLE_TELEGRAM    = True
@@ -23,11 +22,13 @@ ENABLE_TELEGRAM    = True
 def main():
     log.info("Initializing MT5 container connections...")
     
-    # Wait in a loop for MT5 container socket to be online
+    # Retry loop: waits for MT5 container socket to come online
     while not initialize_mt5():
         log.info("Waiting 5 seconds for MT5 socket server to become available...")
         time.sleep(5)
-    
+
+    log.info("MT5 container sockets initialized successfully!")
+
     telegram_bot = create_telegram_bot_from_env() if ENABLE_TELEGRAM else None
     if telegram_bot:
         telegram_bot.start()
@@ -68,7 +69,7 @@ def main():
                 telegram_bot.stop()
             break
         except Exception as exc:
-            log.error("Unexpected error: %s", exc, exc_info=True)
+            log.error("Unexpected error in main loop: %s", exc, exc_info=True)
 
         time.sleep(POLL_SECONDS)
 

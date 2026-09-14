@@ -1,16 +1,14 @@
-version: '3.8'
-
 services:
   mt5-fxpro:
     image: gmag11/metatrader5_vnc:latest
     container_name: mt5_fxpro
     restart: always
     ports:
-      - "3000:3000"   # Browser VNC interface (for manual setup/login)
-      - "8001:8001"   # mt5linux IPC API Port
+      - "3000:3000"
+      - "8001:18812"
     environment:
-      - CUSTOM_USER=${CONTAINER_USER}
-      - PASSWORD=${VNC_PASSWORD}
+      - CUSTOM_USER=${CONTAINER_USER:-abc}
+      - PASSWORD=${VNC_PASSWORD:-password}
     volumes:
       - ./mt5_fxpro_data:/config
 
@@ -19,11 +17,11 @@ services:
     container_name: mt5_nairafunded
     restart: always
     ports:
-      - "3001:3000"   # Browser VNC interface (separate port)
-      - "8002:8001"   # mt5linux IPC API Port (separate port)
+      - "3001:3000"
+      - "8002:18812"
     environment:
-      - CUSTOM_USER=${CONTAINER_USER}
-      - PASSWORD=${VNC_PASSWORD}
+      - CUSTOM_USER=${CONTAINER_USER:-abc}
+      - PASSWORD=${VNC_PASSWORD:-password}
     volumes:
       - ./mt5_nairafunded_data:/config
 
@@ -32,11 +30,11 @@ services:
     container_name: mt5_nairatrader
     restart: always
     ports:
-      - "3002:3000"   # Browser VNC interface (separate port)
-      - "8003:8001"   # mt5linux IPC API Port (separate port)
+      - "3002:3000"
+      - "8003:18812"
     environment:
-      - CUSTOM_USER=${CONTAINER_USER}
-      - PASSWORD=${VNC_PASSWORD}
+      - CUSTOM_USER=${CONTAINER_USER:-abc}
+      - PASSWORD=${VNC_PASSWORD:-password}
     volumes:
       - ./mt5_nairatrader_data:/config
 

@@ -11,14 +11,15 @@ log = logging.getLogger(__name__)
 
 MAGIC_NUMBER = 888999
 
+# Verify these exact ticker casings in the Market Watch window for each broker
 SYMBOL_MAP = {
     "FxPro": {"GOLD": "GOLD", "SILVER": "SILVER"},
     "NairaFunded": {"GOLD": "XAUUSDm", "SILVER": "XAGUSDm"},
-    "NairaTrader": {"GOLD": "XAUUSDm", "SILVER": "XAGUSDm"},
+    "NairaTrader": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"},  # Update if NairaTrader uses XAUUSDm / GOLD.m
 }
 
 def get_container_mt5(host_env: str, default_host: str, port_env: str, default_port: int):
-    """Establishes RPyC connection and imports MetaTrader5 from the target container."""
+    """Establishes an RPyC classic connection and imports MetaTrader5 remotely."""
     host = os.getenv(host_env, default_host)
     port = int(os.getenv(port_env, default_port))
     try:
@@ -31,7 +32,7 @@ def get_container_mt5(host_env: str, default_host: str, port_env: str, default_p
 
 def execute_container_trade(account_label: str, host_env: str, default_host: str, port_env: str, default_port: int,
                             symbol: str, direction: str, volume: float, sl: float, tp: float) -> bool:
-    """Dynamically connects and executes a market deal over remote socket connection."""
+    """Executes a market deal on a specific MT5 container with primitive type casting."""
     mt5_instance = get_container_mt5(host_env, default_host, port_env, default_port)
     
     if mt5_instance is None:
@@ -46,12 +47,12 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
 
     symbol_info = mt5_instance.symbol_info(broker_symbol)
     if symbol_info is None:
-        log.error("[%s] Failed to find symbol info for %s", account_label, broker_symbol)
+        log.error("[%s] Failed to find symbol info for %s (Check Market Watch)", account_label, broker_symbol)
         return False
 
     if not symbol_info.visible:
         if not mt5_instance.symbol_select(broker_symbol, True):
-            log.error("[%s] Failed to select symbol %s", account_label, broker_symbol)
+            log.error("[%s] Failed to select symbol %s in Market Watch", account_label, broker_symbol)
             return False
 
     tick = mt5_instance.symbol_info_tick(broker_symbol)
@@ -59,20 +60,20 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
         log.error("[%s] Failed to fetch tick for trade execution on %s", account_label, broker_symbol)
         return False
 
-    digits = symbol_info.digits
-    point = symbol_info.point
-    stop_level = getattr(symbol_info, "trade_stops_level", 0) * point
+    digits = int(symbol_info.digits)
+    point = float(symbol_info.point)
+    stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
     if direction == "long":
         order_type = mt5_instance.ORDER_TYPE_BUY
-        price = tick.ask
+        price = float(tick.ask)
         if sl >= price:
             sl = price - (1.0 if point == 0.01 else 100 * point)
         if (price - sl) < stop_level:
             sl = price - stop_level - (10 * point)
     else:  # short
         order_type = mt5_instance.ORDER_TYPE_SELL
-        price = tick.bid
+        price = float(tick.bid)
         if sl <= price:
             sl = price + (1.0 if point == 0.01 else 100 * point)
         if (sl - price) < stop_level:
@@ -82,7 +83,7 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
     sl = round(sl, digits)
     tp = round(tp, digits)
 
-    filling_mode = symbol_info.filling_mode
+    filling_mode = int(symbol_info.filling_mode)
     if filling_mode & 1:
         filling_type = mt5_instance.ORDER_FILLING_FOK
     elif filling_mode & 2:
@@ -90,31 +91,32 @@ def execute_container_trade(account_label: str, host_env: str, default_host: str
     else:
         filling_type = mt5_instance.ORDER_FILLING_RETURN
 
+    # Force all dictionary parameters to native Python primitives for RPyC serialization
     request = {
-        "action": mt5_instance.TRADE_ACTION_DEAL,
-        "symbol": broker_symbol,
+        "action": int(mt5_instance.TRADE_ACTION_DEAL),
+        "symbol": str(broker_symbol),
         "volume": float(volume),
-        "type": order_type,
+        "type": int(order_type),
         "price": float(price),
         "sl": float(sl),
         "tp": float(tp),
         "deviation": 20,
-        "magic": MAGIC_NUMBER,
-        "comment": f"Bot Signal [{account_label}]",
-        "type_time": mt5_instance.ORDER_TIME_GTC,
-        "type_filling": filling_type,
+        "magic": int(MAGIC_NUMBER),
+        "comment": str(f"Bot Signal [{account_label}]"),
+        "type_time": int(mt5_instance.ORDER_TIME_GTC),
+        "type_filling": int(filling_type),
     }
 
     result = mt5_instance.order_send(request)
-    if result is None or result.retcode != mt5_instance.TRADE_RETCODE_DONE:
-        ret_code = result.retcode if result else "None"
-        ret_comment = result.comment if result else "No Response"
+    if result is None or int(result.retcode) != int(mt5_instance.TRADE_RETCODE_DONE):
+        ret_code = int(result.retcode) if result else "None"
+        ret_comment = str(result.comment) if result else "No Response"
         log.error("❌ MT5 [%s] Order Failed! Symbol: %s | Retcode: %s | Description: %s", 
                   account_label, broker_symbol, ret_code, ret_comment)
         return False
 
     log.info("🚀 MT5 [%s] Order Executed Successfully! Symbol: %s | Ticket: #%d | %s %.2f lots @ %.2f | SL: %.2f | TP: %.2f",
-             account_label, broker_symbol, result.order, direction.upper(), volume, price, sl, tp)
+             account_label, broker_symbol, int(result.order), direction.upper(), volume, price, sl, tp)
     return True
 
 def execute_multi_account_trades(symbol: str, direction: str, volume: float, sl: float, tp: float) -> bool:
@@ -126,7 +128,7 @@ def execute_multi_account_trades(symbol: str, direction: str, volume: float, sl:
     return res_fxpro or res_nairafunded or res_nairatrader
 
 def get_current_price_mt5(symbol: str) -> tuple[float, float]:
-    """Fetches market ticks using the primary FxPro container connection."""
+    """Fetches real-time market ticks using the primary FxPro container connection."""
     mt5_fxpro = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
     if mt5_fxpro is None:
         raise ValueError("FxPro MT5 container socket connection is offline")
@@ -134,4 +136,4 @@ def get_current_price_mt5(symbol: str) -> tuple[float, float]:
     tick = mt5_fxpro.symbol_info_tick(broker_symbol)
     if tick is None:
         raise ValueError(f"Could not get tick data for {broker_symbol}")
-    return tick.bid, tick.ask
+    return float(tick.bid), float(tick.ask)
