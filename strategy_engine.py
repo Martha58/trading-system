@@ -1,4 +1,7 @@
 from datetime import datetime, timezone
+import pandas as pd
+import logging
+import os
 
 from indicator import (
     compute_atr, 
@@ -8,16 +11,9 @@ from indicator import (
     is_bullish_wickless
 )
 
-from data_extraction import (
-    is_london_or_ny_session,
-)
-
+from data_extraction import is_london_or_ny_session
 from telegram_bot import TelegramSignalBot
 from trade_executor import execute_multi_account_trades
-
-import pandas as pd
-import logging
-import os
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,8 +23,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # AUTOMATED EXECUTION SETTINGS
-LOT_SIZE           = float(os.getenv("LOT_SIZE", "0.01"))  # Lot size per trade
-MAGIC_NUMBER       = 888999                               # Unique ID for bot orders
+LOT_SIZE           = float(os.getenv("LOT_SIZE", "0.01"))
+MAGIC_NUMBER       = 888999
 
 WICK_TOLERANCE_PCT = 0.05
 ATR_PERIOD         = 14
@@ -39,9 +35,6 @@ MAX_ZONE_AGE       = 8
 EMA_FAST           = 20               
 EMA_SLOW           = 50               
 NEUTRAL_BAND_PCT   = 0.05             
-
-PAPER_TRADE        = True             
-ENABLE_TELEGRAM    = os.getenv("ENABLE_TELEGRAM", "true").lower() == "true"
 
 # DATA STRUCTURES
 class Zone:
@@ -85,10 +78,10 @@ class Trade:
 class WicklessCandleBot:
     def __init__(self, symbol: str, telegram_bot: TelegramSignalBot = None):
         self.symbol           = symbol
-        self.zones            : list[Zone]  = []
+        self.zones            : list[Zone]   = []
         self.open_trade       : Trade | None = None
-        self.closed_trades    : list[Trade] = []
-        self._known_zone_keys : set         = set()
+        self.closed_trades    : list[Trade]  = []
+        self._known_zone_keys : set          = set()
         self.live_mode        = False
         self.telegram         = telegram_bot
 
@@ -293,7 +286,6 @@ class WicklessCandleBot:
                 log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
-                # EXECUTE DUAL MT5 ORDERS (Passing "long" directly)
                 if self.symbol.upper() == "GOLD":
                     execute_multi_account_trades(self.symbol, "long", LOT_SIZE, sl, tp)
 
@@ -318,7 +310,6 @@ class WicklessCandleBot:
                 log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
-                # EXECUTE DUAL MT5 ORDERS (Passing "short" directly)
                 if self.symbol.upper() == "GOLD":
                     execute_multi_account_trades(self.symbol, "short", LOT_SIZE, sl, tp)
 
@@ -337,11 +328,13 @@ class WicklessCandleBot:
                 continue
             try:
                 zone_pos = closed_df.index.get_loc(zone.source_ts)
+                age = latest_pos - zone_pos
+                if age > MAX_ZONE_AGE:
+                    zone.active = False
+                    log.info("[%s] ⏰ Zone at %.2f expired (Reached max age %d candles)", self.symbol, zone.price, age)
             except KeyError:
                 zone.active = False
-                continue
-            if (latest_pos - zone_pos) > MAX_ZONE_AGE:
-                zone.active = False
+                log.info("[%s] 🚫 Zone at %.2f invalidated (Out of DataFrame window)", self.symbol, zone.price)
 
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):
         atr = compute_atr(df, ATR_PERIOD)
@@ -350,14 +343,18 @@ class WicklessCandleBot:
         closed_df = df.iloc[:-1]
         for i, (ts, row) in enumerate(closed_df.iterrows()):
             a = atr.iloc[i]
+            # Convert pandas Timestamp to string to keep keys immutable across iterations
+            ts_str = str(ts)
             for direction, detector in [("long", is_bullish_wickless), ("short", is_bearish_wickless)]:
-                key = (ts, direction)
+                key = (ts_str, direction)
                 if key in self._known_zone_keys:
                     continue
                 if detector(row, WICK_TOLERANCE_PCT):
                     self.zones.append(Zone(row["open"], direction, i, a, ts))
                     self._known_zone_keys.add(key)
-                    log.info("[%s] Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts)
+                    # Only print spot logs when live_mode is active (new candles forming live)
+                    if self.live_mode:
+                        log.info("✨ [%s] NEW Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts_str)
 
         self._expire_stale_zones(closed_df)
         latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -372,7 +369,6 @@ class WicklessCandleBot:
         if not self.open_trade and self.live_mode:
             self._check_entries_live(live_price, latest_ts, closed_df, trend, news_blocked)
 
-        # Explicit active trade status logger across MT5 & Telegram Channels
         if self.open_trade:
             mt5_status = "RUNNING" if self.symbol.upper() == "GOLD" else "SKIPPED (GOLD ONLY)"
             ch1_2_status = "ACTIVE" if (self.symbol.upper() == "GOLD" and is_london_or_ny_session() and self.daily_losses < 2) else "PAUSED/OFF-SESSION/DISABLED"
