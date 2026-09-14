@@ -46,9 +46,6 @@ class Zone:
         self.source_ts = source_ts
         self.active    = True
 
-    def age(self, current_idx: int) -> int:
-        return current_idx - self.bar_idx
-
 class Trade:
     def __init__(self, symbol, direction, entry, sl, tp, timestamp, trend, zone=None, telegram_targets=None):
         self.symbol           = symbol
@@ -82,7 +79,7 @@ class WicklessCandleBot:
         self.zones            : list[Zone]   = []
         self.open_trade       : Trade | None = None
         self.closed_trades    : list[Trade]  = []
-        self._known_zone_keys : set          = set()
+        self._consumed_ts     : set          = set() # Tracks used/expired zone timestamps permanently
         self.live_mode        = False
         self.telegram         = telegram_bot
 
@@ -138,7 +135,7 @@ class WicklessCandleBot:
                 for zone in bt_zones:
                     if not zone.active:
                         continue
-                    if zone.age(i) > MAX_ZONE_AGE:
+                    if (i - zone.bar_idx) > MAX_ZONE_AGE:
                         zone.active = False
                         continue
                     if zone.direction == "long" and trend == "down":
@@ -251,20 +248,15 @@ class WicklessCandleBot:
 
         latest_pos = len(closed_df) - 1
 
-        for zone in self.zones:
+        for zone in list(self.zones):
             if not zone.active:
                 continue
 
-            try:
-                zone_pos = closed_df.index.get_loc(zone.source_ts)
-                age = latest_pos - zone_pos
-            except KeyError:
-                zone.active = False
-                continue
-
+            age = latest_pos - zone.bar_idx
             if age > MAX_ZONE_AGE:
                 zone.active = False
-                log.info("[%s] 🚫 Zone at %.2f expired (Age: %d candles)", self.symbol, zone.price, age)
+                self._consumed_ts.add(zone.source_ts)
+                log.info("[%s] ⏰ Zone at %.2f expired (Age: %d candles)", self.symbol, zone.price, age)
                 continue
 
             if zone.direction == "long" and trend == "down":
@@ -282,11 +274,11 @@ class WicklessCandleBot:
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
 
-                # Deactivate the zone so it can NEVER trigger another trade or signal
                 zone.active = False
+                self._consumed_ts.add(zone.source_ts)
 
                 self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
-                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone deactivated)",
+                log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone consumed)",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
                 if self.symbol.upper() == "GOLD":
@@ -308,11 +300,11 @@ class WicklessCandleBot:
                     if is_london_or_ny_session() and self.daily_losses < 2:
                         telegram_targets.extend(["1", "2"])
 
-                # Deactivate the zone so it can NEVER trigger another trade or signal
                 zone.active = False
+                self._consumed_ts.add(zone.source_ts)
 
                 self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, zone=zone, telegram_targets=telegram_targets)
-                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone deactivated)",
+                log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f (Zone consumed)",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
                 if self.symbol.upper() == "GOLD":
@@ -324,44 +316,40 @@ class WicklessCandleBot:
                     )
                 break
 
-    def _expire_stale_zones(self, closed_df: pd.DataFrame):
-            if len(closed_df) == 0:
-                return
-            latest_pos = len(closed_df) - 1
-            for zone in self.zones:
-                if not zone.active:
-                    continue
-                try:
-                    zone_pos = closed_df.index.get_loc(zone.source_ts)
-                except KeyError:
-                    zone.active = False
-                    continue
-                if (latest_pos - zone_pos) > MAX_ZONE_AGE:
-                    zone.active = False
-
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):
         atr = compute_atr(df, ATR_PERIOD)
         ema_fast, ema_slow = compute_emas(df)
         
         closed_df = df.iloc[:-1]
-        for i, (ts, row) in enumerate(closed_df.iterrows()):
-            a = atr.iloc[i]
-            # Convert pandas Timestamp to string to keep keys immutable across iterations
-            ts_str = str(ts)
-            for direction, detector in [("long", is_bullish_wickless), ("short", is_bearish_wickless)]:
-                key = (ts_str, direction)
-                if key in self._known_zone_keys:
-                    continue
-                if detector(row, WICK_TOLERANCE_PCT):
-                    self.zones.append(Zone(row["open"], direction, i, a, ts))
-                    self._known_zone_keys.add(key)
-                    # Only print spot logs when live_mode is active (new candles forming live)
-                    if self.live_mode:
-                        log.info("[%s] Wickless candle zone spotted at %.2f (%s on %s)", self.symbol, row['open'], direction.upper(), ts)
+        latest_pos = len(closed_df) - 1
 
-        self._expire_stale_zones(closed_df)
-        latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Re-build active zones strictly from current dataframe state to prevent duplicates
+        new_active_zones: list[Zone] = []
         
+        for i, (ts, row) in enumerate(closed_df.iterrows()):
+            # Skip if this timestamp was already consumed by an entry or max-age expiration
+            if ts in self._consumed_ts:
+                continue
+
+            a = atr.iloc[i]
+            for direction, detector in [("long", is_bullish_wickless), ("short", is_bearish_wickless)]:
+                if detector(row, WICK_TOLERANCE_PCT):
+                    age = latest_pos - i
+                    if age <= MAX_ZONE_AGE:
+                        zone = Zone(row["open"], direction, i, a, ts)
+                        new_active_zones.append(zone)
+                        
+                        # Log ONLY if a brand-new live candle just closed
+                        if self.live_mode and age == 0 and ts not in getattr(self, "_logged_live_ts", set()):
+                            if not hasattr(self, "_logged_live_ts"):
+                                self._logged_live_ts = set()
+                            self._logged_live_ts.add(ts)
+                            log.info("✨ [%s] NEW Wickless candle zone formed at %.2f (%s on %s)", 
+                                     self.symbol, row['open'], direction.upper(), ts)
+
+        self.zones = new_active_zones
+
+        latest_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ef = ema_fast.iloc[-1]
         es = ema_slow.iloc[-1]
         trend = get_trend(ef, es, live_price)
