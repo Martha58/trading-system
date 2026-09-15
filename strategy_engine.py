@@ -77,16 +77,17 @@ class Trade:
 # STRATEGY ENGINE
 class WicklessCandleBot:
     def __init__(self, symbol: str, telegram_bot: TelegramSignalBot = None):
-        self.symbol           = symbol
-        self.zones            : list[Zone]  = []
-        self.open_trade       : Trade | None = None
-        self.closed_trades    : list[Trade] = []
-        self._known_zone_keys : set         = set()
-        self.live_mode        = False
-        self.telegram         = telegram_bot
+        self.symbol                = symbol
+        self.zones                 : list[Zone]  = []
+        self.open_trade            : Trade | None = None
+        self.closed_trades         : list[Trade] = []
+        self._known_zone_keys      : set         = set()
+        self._triggered_zone_keys  : set         = set()
+        self.live_mode             = False
+        self.telegram              = telegram_bot
 
-        self.daily_losses     = 0
-        self.last_loss_date   = datetime.now(timezone.utc).date()
+        self.daily_losses          = 0
+        self.last_loss_date        = datetime.now(timezone.utc).date()
 
     def backtest(self, df: pd.DataFrame):
         """Replay historical closed candles to estimate strategy performance."""
@@ -254,6 +255,11 @@ class WicklessCandleBot:
             if not zone.active:
                 continue
 
+            zone_key = (zone.source_ts, zone.direction)
+            if zone_key in self._triggered_zone_keys:
+                zone.active = False
+                continue
+
             try:
                 zone_pos = closed_df.index.get_loc(zone.source_ts)
                 age = latest_pos - zone_pos
@@ -291,6 +297,7 @@ class WicklessCandleBot:
 
                 self.open_trade = Trade(self.symbol, "long", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
                 zone.active = False
+                self._triggered_zone_keys.add(zone_key)
                 log.info("[%s] 🟢 REALTIME LONG ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
@@ -327,6 +334,7 @@ class WicklessCandleBot:
 
                 self.open_trade = Trade(self.symbol, "short", zone.price, sl, tp, ts, trend, telegram_targets=telegram_targets)
                 zone.active = False
+                self._triggered_zone_keys.add(zone_key)
                 log.info("[%s] 🔴 REALTIME SHORT ENTRY [trend=%s] Live=%.2f Entry=%.2f SL=%.2f TP=%.2f",
                          self.symbol, trend, live_price, zone.price, sl, tp)
                 
@@ -350,12 +358,11 @@ class WicklessCandleBot:
         for zone in self.zones:
             if not zone.active:
                 continue
-            try:
+            if zone.source_ts in closed_df.index:
                 zone_pos = closed_df.index.get_loc(zone.source_ts)
-            except KeyError:
-                zone.active = False
-                continue
-            if (latest_pos - zone_pos) > MAX_ZONE_AGE:
+                if (latest_pos - zone_pos) > MAX_ZONE_AGE:
+                    zone.active = False
+            else:
                 zone.active = False
 
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):
