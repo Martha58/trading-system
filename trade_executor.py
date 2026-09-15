@@ -130,16 +130,16 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         tp = float(f"{tp:.{digits}f}")
         volume = float(f"{volume:.2f}")
 
-        # Check broker supported filling mode
-        filling_mode = int(getattr(symbol_info, "filling_mode", 0))
-        possible_fillings = []
-        if filling_mode & 1:
-            possible_fillings.append(int(mt5_inst.ORDER_FILLING_FOK))
-        if filling_mode & 2:
-            possible_fillings.append(int(mt5_inst.ORDER_FILLING_IOC))
-        possible_fillings.append(int(getattr(mt5_inst, "ORDER_FILLING_RETURN", 2)))
+        # Try supported filling modes in sequence
+        possible_fillings = [
+            int(getattr(mt5_inst, "ORDER_FILLING_IOC", 1)),
+            int(getattr(mt5_inst, "ORDER_FILLING_FOK", 0)),
+            int(getattr(mt5_inst, "ORDER_FILLING_RETURN", 2)),
+        ]
 
         result = None
+        last_request = {}
+
         for fill_type in possible_fillings:
             request = {
                 "action": int(mt5_inst.TRADE_ACTION_DEAL),
@@ -152,9 +152,9 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 "deviation": int(20),
                 "magic": int(888999),
                 "comment": str("Wickless Bot Multi-Account"),
-                "type_time": int(mt5_inst.ORDER_TIME_GTC),
                 "type_filling": int(fill_type),
             }
+            last_request = request
 
             remote_request = conn.builtins.dict(request)
             result = mt5_inst.order_send(request=remote_request)
@@ -170,7 +170,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
             ret_code = getattr(result, 'retcode', 'None')
             ret_comment = getattr(result, 'comment', 'No Response')
-            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | last_error={mt5_inst.last_error()} | request={request}")
+            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | last_error={mt5_inst.last_error()} | request={last_request}")
             return False
 
         log.info(f"🚀 [{broker_name}] Order Executed! Ticket: #{result.order} | {direction.upper()} {volume} lots @ {price}")
