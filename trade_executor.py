@@ -1,5 +1,6 @@
 import os
 import logging
+import math
 import rpyc
 
 logging.basicConfig(
@@ -95,6 +96,11 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         point = float(symbol_info.point)
         stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
+        # Normalize volume to broker step size
+        vol_step = float(getattr(symbol_info, "volume_step", 0.01))
+        vol_min = float(getattr(symbol_info, "volume_min", 0.01))
+        volume = max(vol_min, round(volume / vol_step) * vol_step)
+
         if direction.lower() == "long":
             order_type = int(mt5_inst.ORDER_TYPE_BUY)
             price = float(tick.ask)
@@ -110,10 +116,13 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             if (sl - price) < stop_level:
                 sl = price + stop_level + (10 * point)
 
-        price = float(round(price, digits))
-        sl = float(round(sl, digits))
-        tp = float(round(tp, digits))
+        # Strictly format floats to match exact digit precision
+        price = float(f"{price:.{digits}f}")
+        sl = float(f"{sl:.{digits}f}")
+        tp = float(f"{tp:.{digits}f}")
+        volume = float(f"{volume:.2f}")
 
+        # Check broker supported filling mode
         filling_mode = int(getattr(symbol_info, "filling_mode", 0))
         possible_fillings = []
         if filling_mode & 1:
@@ -140,15 +149,14 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             }
 
             remote_request = conn.builtins.dict(request)
-            # KEYWORD ARGUMENT FIX FOR RPYC: request=remote_request
             result = mt5_inst.order_send(request=remote_request)
             
-            if result is not None:
+            if result is not None and getattr(result, 'retcode', None) == mt5_inst.TRADE_RETCODE_DONE:
                 break
 
         if result is None:
             err = mt5_inst.last_error()
-            log.error(f"❌ [{broker_name}] Order Failed! mt5.order_send returned None for all filling modes. MT5 Error: {err}")
+            log.error(f"❌ [{broker_name}] Order Failed! mt5.order_send returned None. MT5 Error: {err}")
             return False
 
         if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
