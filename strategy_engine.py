@@ -363,6 +363,7 @@ class WicklessCandleBot:
                 if (latest_pos - zone_pos) > MAX_ZONE_AGE:
                     zone.active = False
             else:
+                # If the zone timestamp has aged past the 200-candle window, expire it
                 zone.active = False
 
     def process_latest(self, df: pd.DataFrame, live_price: float, news_blocked: bool = False):

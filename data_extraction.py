@@ -68,13 +68,13 @@ def fetch_ohlc_mt5(symbol: str, timeframe_minutes: int = 15, count: int = 200) -
     if rates is None or len(rates) == 0:
         raise ValueError(f"Failed to retrieve rates for {broker_symbol}")
 
-    # Pull raw rates structured array into local process memory
     local_rates = rpyc.classic.obtain(rates)
-
-    # Convert structured numpy array explicitly into a list of tuples with field names
     colnames = list(local_rates.dtype.names)
     df = pd.DataFrame(local_rates.tolist(), columns=colnames)
 
     df["time"] = pd.to_datetime(df["time"], unit="s")
     df.rename(columns={"tick_volume": "volume"}, inplace=True)
-    return df[["time", "open", "high", "low", "close", "volume"]]
+
+    # SET TIME AS THE DATAFRAME INDEX (CRITICAL FIX)
+    df.set_index("time", inplace=True)
+    return df[["open", "high", "low", "close", "volume"]]
