@@ -159,6 +159,55 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             )
             return False
 
+                # ---- DIAGNOSTIC ----
+        term = mt5_inst.terminal_info()
+        acct = mt5_inst.account_info()
+        log.info(
+            f"[{broker_name}] TERM  | trade_allowed={getattr(term,'trade_allowed',None)} "
+            f"| connected={getattr(term,'connected',None)} "
+            f"| tradeapi_disabled={getattr(term,'tradeapi_disabled',None)} "
+            f"| build={getattr(term,'build',None)} "
+            f"| name={getattr(term,'name',None)} "
+            f"| path={getattr(term,'path',None)}"
+        )
+        log.info(
+            f"[{broker_name}] ACCT  | login={getattr(acct,'login',None)} "
+            f"| server={getattr(acct,'server',None)} "
+            f"| trade_allowed={getattr(acct,'trade_allowed',None)} "
+            f"| trade_expert={getattr(acct,'trade_expert',None)} "
+            f"| margin_free={getattr(acct,'margin_free',None)} "
+            f"| currency={getattr(acct,'currency',None)} "
+            f"| leverage={getattr(acct,'leverage',None)}"
+        )
+        log.info(
+            f"[{broker_name}] SYM   | name={symbol_info.name} "
+            f"| digits={symbol_info.digits} point={symbol_info.point} "
+            f"| trade_mode={symbol_info.trade_mode} "
+            f"| filling_mode={symbol_info.filling_mode} "
+            f"| stops_level={symbol_info.trade_stops_level} "
+            f"| freeze_level={symbol_info.trade_freeze_level} "
+            f"| vol_min={symbol_info.volume_min} vol_step={symbol_info.volume_step} "
+            f"| bid={tick.bid} ask={tick.ask}"
+        )
+        # ---- END DIAGNOSTIC ----
+
+                # order_check runs the SAME server-side validation as order_send,
+        # but never places the order. Its comment is far more specific.
+        try:
+            check = mt5_inst.order_check(request=request)
+            log.info(f"[{broker_name}] order_check -> {check}")
+            if check is not None:
+                log.info(
+                    f"[{broker_name}] check detail | retcode={check.retcode} "
+                    f"| comment='{check.comment}' "
+                    f"| margin={getattr(check,'margin',None)} "
+                    f"| margin_free={getattr(check,'margin_free',None)} "
+                    f"| balance={getattr(check,'balance',None)} "
+                    f"| equity={getattr(check,'equity',None)}"
+                )
+        except Exception as e:
+            log.warning(f"[{broker_name}] order_check raised: {e}")
+
         request = {
             "action": int(mt5_inst.TRADE_ACTION_DEAL),
             "symbol": broker_symbol,
