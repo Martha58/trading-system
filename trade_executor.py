@@ -95,7 +95,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         point = float(symbol_info.point)
         stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
-        # Normalize volume to broker step size
+        # Normalize volume
         vol_step = float(getattr(symbol_info, "volume_step", 0.01))
         vol_min = float(getattr(symbol_info, "volume_min", 0.01))
         volume = max(vol_min, round(volume / vol_step) * vol_step)
@@ -123,12 +123,12 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             if (price - tp) < stop_level:
                 tp = price - stop_level - (10 * point)
 
-        # Strictly format floats to match exact digit precision
+        price = float(f"{price:.{digits}f}")
         sl = float(f"{sl:.{digits}f}")
         tp = float(f"{tp:.{digits}f}")
         volume = float(f"{volume:.2f}")
 
-        # Try supported filling modes in sequence
+        # Cycle through supported broker filling modes
         possible_fillings = [
             int(getattr(mt5_inst, "ORDER_FILLING_IOC", 1)),
             int(getattr(mt5_inst, "ORDER_FILLING_FOK", 0)),
@@ -144,12 +144,12 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 "symbol": str(broker_symbol),
                 "volume": float(volume),
                 "type": int(order_type),
-                "price": float(0.0),  # CRITICAL FIX: Must be 0.0 for Market Deals with SL/TP
+                "price": float(price),  # MUST pass current ask/bid price
                 "sl": float(sl),
                 "tp": float(tp),
                 "deviation": int(20),
                 "magic": int(888999),
-                "comment": str(""),
+                "comment": str("Wickless Bot Multi-Account"),
                 "type_filling": int(fill_type),
             }
             last_request = request
@@ -157,6 +157,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             remote_request = conn.builtins.dict(request)
             result = mt5_inst.order_send(request=remote_request)
             
+            # Stop if trade was successful
             if result is not None and getattr(result, 'retcode', None) == mt5_inst.TRADE_RETCODE_DONE:
                 break
 
