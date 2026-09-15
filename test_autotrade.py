@@ -14,8 +14,8 @@ def test_trade_execution():
     
     # Set execution levels close to live price
     entry_price = ask
-    sl = round(entry_price - 5.0, 2)  # 50 pips below Ask
-    tp = round(entry_price + 5.0, 2)  # 50 pips above Ask
+    sl = round(entry_price - 20.0, 2)  # 200 pips below Ask
+    tp = round(entry_price + 20.0, 2)
 
     log.info(f"Test Trade Parameters | Entry: {entry_price} | SL: {sl} | TP: {tp}")
     log.info("Sending test trade to all container accounts...")
