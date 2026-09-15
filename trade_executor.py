@@ -170,6 +170,7 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             "deviation": 20,
             "magic": 888999,
             "comment": "WicklessBot",
+            "type_time": int(mt5_inst.ORDER_TIME_GTC),   # ← ADD THIS
             "type_filling": type_filling,
         }
 
