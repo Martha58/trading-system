@@ -29,6 +29,7 @@ BROKER_CONFIGS = {
 
 SYMBOL_MAP = {b: cfg["symbols"] for b, cfg in BROKER_CONFIGS.items()}
 
+
 def get_container_mt5(host_env: str, default_host: str, port_env: str, default_port: int):
     host = os.getenv(host_env, default_host)
     port = int(os.getenv(port_env, default_port))
@@ -40,26 +41,30 @@ def get_container_mt5(host_env: str, default_host: str, port_env: str, default_p
         log.error(f"Failed to connect to MT5 container at {host}:{port} -> {e}")
         return None, None
 
+
 def get_current_price_mt5(symbol: str) -> tuple[float, float]:
     mt5_inst, conn = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
     if not mt5_inst:
         raise ValueError(f"Could not connect to primary MT5 container for {symbol}")
-    
+
     try:
         if not mt5_inst.initialize():
-            raise ValueError(f"Failed to initialize primary MT5 terminal")
-            
+            raise ValueError("Failed to initialize primary MT5 terminal")
+
         broker_symbol = str(SYMBOL_MAP.get("FxPro", {}).get(symbol.upper(), symbol))
         mt5_inst.symbol_select(broker_symbol, True)
-        
+
         tick = mt5_inst.symbol_info_tick(broker_symbol)
         if tick is None:
             raise ValueError(f"Could not get tick data for {broker_symbol}")
         return float(tick.bid), float(tick.ask)
     finally:
         if conn:
-            try: conn.close()
-            except Exception: pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 def execute_container_trade(broker_name, config, symbol, direction, volume, sl, tp):
     mt5_inst, conn = get_container_mt5(
@@ -86,10 +91,9 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             log.error(f"[{broker_name}] No symbol_info for {broker_symbol}")
             return False
 
-        # ---- NEW: verify symbol is tradeable ----
-        # SYMBOL_TRADE_MODE_FULL = 4
+        # Verify symbol is fully tradeable (SYMBOL_TRADE_MODE_FULL = 4)
         trade_mode = int(getattr(symbol_info, "trade_mode", -1))
-        if trade_mode not in (4,):  # 4 == full trading
+        if trade_mode != 4:
             log.error(
                 f"[{broker_name}] Symbol {broker_symbol} not fully tradeable "
                 f"(trade_mode={trade_mode})."
@@ -105,7 +109,7 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
         point = float(symbol_info.point)
         stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
-        # ---- volume normalization (unchanged) ----
+        # Volume normalization
         vol_step = float(getattr(symbol_info, "volume_step", 0.01)) or 0.01
         vol_min = float(getattr(symbol_info, "volume_min", 0.01))
         volume = max(vol_min, round(volume / vol_step) * vol_step)
@@ -138,7 +142,7 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
         tp = float(f"{tp:.{digits}f}")
         volume = float(f"{volume:.2f}")
 
-        # ---- NEW: choose filling mode from symbol_info.filling_mode ----
+        # Choose filling mode from symbol_info.filling_mode
         SYMBOL_FILLING_FOK = int(getattr(mt5_inst, "SYMBOL_FILLING_FOK", 1))
         SYMBOL_FILLING_IOC = int(getattr(mt5_inst, "SYMBOL_FILLING_IOC", 2))
 
@@ -150,25 +154,20 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
         elif filling_mode & SYMBOL_FILLING_IOC:
             type_filling = int(mt5_inst.ORDER_FILLING_IOC)
         else:
-            # Neither FOK nor IOC -> this symbol can only be traded with
-            # ORDER_FILLING_RETURN, but only for *pending* orders. A market
-            # order on this symbol will not be possible.
             log.error(
                 f"[{broker_name}] Symbol {broker_symbol} supports neither FOK "
                 f"nor IOC filling; market order not possible."
             )
             return False
 
-                # ---- DIAGNOSTIC ----
+        # ---- DIAGNOSTIC: terminal / account / symbol state ----
         term = mt5_inst.terminal_info()
         acct = mt5_inst.account_info()
         log.info(
             f"[{broker_name}] TERM  | trade_allowed={getattr(term,'trade_allowed',None)} "
             f"| connected={getattr(term,'connected',None)} "
             f"| tradeapi_disabled={getattr(term,'tradeapi_disabled',None)} "
-            f"| build={getattr(term,'build',None)} "
-            f"| name={getattr(term,'name',None)} "
-            f"| path={getattr(term,'path',None)}"
+            f"| build={getattr(term,'build',None)}"
         )
         log.info(
             f"[{broker_name}] ACCT  | login={getattr(acct,'login',None)} "
@@ -176,38 +175,20 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             f"| trade_allowed={getattr(acct,'trade_allowed',None)} "
             f"| trade_expert={getattr(acct,'trade_expert',None)} "
             f"| margin_free={getattr(acct,'margin_free',None)} "
-            f"| currency={getattr(acct,'currency',None)} "
-            f"| leverage={getattr(acct,'leverage',None)}"
+            f"| currency={getattr(acct,'currency',None)}"
         )
         log.info(
             f"[{broker_name}] SYM   | name={symbol_info.name} "
-            f"| digits={symbol_info.digits} point={symbol_info.point} "
-            f"| trade_mode={symbol_info.trade_mode} "
-            f"| filling_mode={symbol_info.filling_mode} "
+            f"| digits={digits} point={point} "
+            f"| trade_mode={trade_mode} "
+            f"| filling_mode={filling_mode} "
             f"| stops_level={symbol_info.trade_stops_level} "
-            f"| freeze_level={symbol_info.trade_freeze_level} "
-            f"| vol_min={symbol_info.volume_min} vol_step={symbol_info.volume_step} "
+            f"| freeze_level={getattr(symbol_info,'trade_freeze_level',None)} "
             f"| bid={tick.bid} ask={tick.ask}"
         )
         # ---- END DIAGNOSTIC ----
 
-                # order_check runs the SAME server-side validation as order_send,
-        # but never places the order. Its comment is far more specific.
-        try:
-            check = mt5_inst.order_check(request=request)
-            log.info(f"[{broker_name}] order_check -> {check}")
-            if check is not None:
-                log.info(
-                    f"[{broker_name}] check detail | retcode={check.retcode} "
-                    f"| comment='{check.comment}' "
-                    f"| margin={getattr(check,'margin',None)} "
-                    f"| margin_free={getattr(check,'margin_free',None)} "
-                    f"| balance={getattr(check,'balance',None)} "
-                    f"| equity={getattr(check,'equity',None)}"
-                )
-        except Exception as e:
-            log.warning(f"[{broker_name}] order_check raised: {e}")
-
+        # ---- Build the request ----
         request = {
             "action": int(mt5_inst.TRADE_ACTION_DEAL),
             "symbol": broker_symbol,
@@ -218,20 +199,46 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             "tp": float(tp),
             "deviation": 20,
             "magic": 888999,
-            "comment": "WicklessBot",
-            "type_time": int(mt5_inst.ORDER_TIME_GTC),   # ← ADD THIS
-            "type_filling": type_filling,
+            "comment": "",                                # EMPTY (was 'WicklessBot')
+            "type_time": int(mt5_inst.ORDER_TIME_GTC),    # GTC = 0
+            "type_filling": int(type_filling),
         }
 
+        # ---- ORDER_CHECK: must run AFTER request is built, BEFORE order_send ----
+        try:
+            check = mt5_inst.order_check(request=request)
+            if check is None:
+                log.error(
+                    f"[{broker_name}] order_check returned None. "
+                    f"last_error={mt5_inst.last_error()}"
+                )
+            else:
+                log.info(
+                    f"[{broker_name}] order_check | retcode={check.retcode} "
+                    f"| comment='{check.comment}' "
+                    f"| margin={getattr(check,'margin',None)} "
+                    f"| margin_free={getattr(check,'margin_free',None)} "
+                    f"| balance={getattr(check,'balance',None)} "
+                    f"| equity={getattr(check,'equity',None)}"
+                )
+        except Exception as e:
+            log.warning(f"[{broker_name}] order_check raised: {e}")
+        # ---- END ORDER_CHECK ----
+
+        # ---- Build native remote dict and send ----
         log.info(f"[{broker_name}] Sending request: {request}")
 
-        # KEYWORD arg required by rpyc + MT5 C extension
-        result = mt5_inst.order_send(request=request)
+        try:
+            remote_request = conn.builtins.dict(request)
+            log.info(f"[{broker_name}] remote_request type={type(remote_request)}")
+        except Exception as e:
+            log.warning(
+                f"[{broker_name}] conn.builtins.dict failed ({e}); "
+                f"falling back to direct dict"
+            )
+            remote_request = request
 
-        # If you still get (-2, 'Unnamed arguments not allowed'), use this
-        # instead of the line above:
-        #   remote_request = conn.builtins.dict(request)
-        #   result = mt5_inst.order_send(request=remote_request)
+        result = mt5_inst.order_send(request=remote_request)
 
         if result is None:
             err = mt5_inst.last_error()
@@ -241,7 +248,8 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
         if int(getattr(result, "retcode", -1)) != int(mt5_inst.TRADE_RETCODE_DONE):
             log.error(
                 f"❌ [{broker_name}] Rejected | retcode={result.retcode} "
-                f"| comment={getattr(result, 'comment', '')} | request={request}"
+                f"| comment={getattr(result, 'comment', '')} "
+                f"| request={request}"
             )
             return False
 
@@ -253,8 +261,11 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
 
     finally:
         if conn:
-            try: conn.close()
-            except Exception: pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 def execute_multi_account_trades(symbol: str, direction: str, volume: float, sl: float, tp: float):
     log.info(f"⚡ Executing Multi-Account Trades for {symbol} ({direction.upper()})...")
