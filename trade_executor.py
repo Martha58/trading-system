@@ -9,7 +9,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Corrected symbol mappings for all brokers
 BROKER_CONFIGS = {
     "FxPro": {
         "host_env": "FXPRO_HOST", "default_host": "mt5-fxpro",
@@ -24,7 +23,7 @@ BROKER_CONFIGS = {
     "NairaTrader": {
         "host_env": "NAIRATRADER_HOST", "default_host": "mt5-nairatrader",
         "port_env": "NAIRATRADER_PORT", "default_port": 8001,
-        "symbols": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}  # Fixed symbol name
+        "symbols": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
     }
 }
 
@@ -115,7 +114,6 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         sl = float(round(sl, digits))
         tp = float(round(tp, digits))
 
-        # Build list of filling modes supported by broker
         filling_mode = int(getattr(symbol_info, "filling_mode", 0))
         possible_fillings = []
         if filling_mode & 1:
@@ -142,7 +140,8 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             }
 
             remote_request = conn.builtins.dict(request)
-            result = mt5_inst.order_send(remote_request)
+            # KEYWORD ARGUMENT FIX FOR RPYC: request=remote_request
+            result = mt5_inst.order_send(request=remote_request)
             
             if result is not None:
                 break
