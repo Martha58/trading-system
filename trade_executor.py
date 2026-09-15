@@ -108,6 +108,10 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 sl = price - (1.0 if point == 0.01 else 100 * point)
             if (price - sl) < stop_level:
                 sl = price - stop_level - (10 * point)
+            if tp <= price:
+                tp = price + (1.0 if point == 0.01 else 100 * point)
+            if (tp - price) < stop_level:
+                tp = price + stop_level + (10 * point)
         else:
             order_type = int(mt5_inst.ORDER_TYPE_SELL)
             price = float(tick.bid)
@@ -115,6 +119,10 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 sl = price + (1.0 if point == 0.01 else 100 * point)
             if (sl - price) < stop_level:
                 sl = price + stop_level + (10 * point)
+            if tp >= price:
+                tp = price - (1.0 if point == 0.01 else 100 * point)
+            if (price - tp) < stop_level:
+                tp = price - stop_level - (10 * point)
 
         # Strictly format floats to match exact digit precision
         price = float(f"{price:.{digits}f}")
@@ -162,7 +170,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
             ret_code = getattr(result, 'retcode', 'None')
             ret_comment = getattr(result, 'comment', 'No Response')
-            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment}")
+            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | last_error={mt5_inst.last_error()} | request={request}")
             return False
 
         log.info(f"🚀 [{broker_name}] Order Executed! Ticket: #{result.order} | {direction.upper()} {volume} lots @ {price}")
