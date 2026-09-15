@@ -19,12 +19,12 @@ BROKER_CONFIGS = {
     "NairaFunded": {
         "host_env": "NAIRAFUNDED_HOST", "default_host": "mt5-nairafunded",
         "port_env": "NAIRAFUNDED_PORT", "default_port": 8001,
-        "symbols": {"GOLD": "GOLD", "SILVER": "SILVER"}
+        "symbols": {"GOLD": "XAUUSDm", "SILVER": "XAGUSDm"}
     },
     "NairaTrader": {
         "host_env": "NAIRATRADER_HOST", "default_host": "mt5-nairatrader",
         "port_env": "NAIRATRADER_PORT", "default_port": 8001,
-        "symbols": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
+        "symbols": {"GOLD": "XAUUSD.s", "SILVER": "XAGUSD.s"}
     }
 }
 
