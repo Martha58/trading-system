@@ -20,7 +20,7 @@ def is_london_or_ny_session() -> bool:
 
 def initialize_mt5() -> bool:
     """Checks whether the primary MT5 socket connection is reachable."""
-    mt5_fxpro = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
+    mt5_fxpro, _ = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
     if mt5_fxpro is None:
         return False
     return bool(mt5_fxpro.initialize())

@@ -33,8 +33,8 @@ def get_container_mt5(host_env: str, default_host: str, port_env: str, default_p
     host = os.getenv(host_env, default_host)
     port = int(os.getenv(port_env, default_port))
     try:
-        # Removed unsupported timeout argument; optional sync_request_timeout config added
-        conn = rpyc.classic.connect(host, port, config={"sync_request_timeout": 5})
+        conn = rpyc.classic.connect(host, port)
+        conn._config["sync_request_timeout"] = 5
         return conn.modules.MetaTrader5, conn
     except Exception as e:
         log.error(f"Failed to connect to MT5 container at {host}:{port} -> {e}")
