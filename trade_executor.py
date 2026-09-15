@@ -1,6 +1,5 @@
 import os
 import logging
-import math
 import rpyc
 
 logging.basicConfig(
@@ -125,7 +124,6 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 tp = price - stop_level - (10 * point)
 
         # Strictly format floats to match exact digit precision
-        price = float(f"{price:.{digits}f}")
         sl = float(f"{sl:.{digits}f}")
         tp = float(f"{tp:.{digits}f}")
         volume = float(f"{volume:.2f}")
@@ -146,12 +144,12 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
                 "symbol": str(broker_symbol),
                 "volume": float(volume),
                 "type": int(order_type),
-                "price": float(price),
+                "price": float(0.0),  # CRITICAL FIX: Must be 0.0 for Market Deals with SL/TP
                 "sl": float(sl),
                 "tp": float(tp),
                 "deviation": int(20),
                 "magic": int(888999),
-                "comment": str("Wickless Bot Multi-Account"),
+                "comment": str(""),
                 "type_filling": int(fill_type),
             }
             last_request = request
@@ -170,7 +168,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
             ret_code = getattr(result, 'retcode', 'None')
             ret_comment = getattr(result, 'comment', 'No Response')
-            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | last_error={mt5_inst.last_error()} | request={last_request}")
+            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | request={last_request}")
             return False
 
         log.info(f"🚀 [{broker_name}] Order Executed! Ticket: #{result.order} | {direction.upper()} {volume} lots @ {price}")
