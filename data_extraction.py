@@ -27,7 +27,7 @@ def initialize_mt5() -> bool:
 
 def fetch_year_to_date_ohlc_mt5(symbol: str, timeframe: int) -> pd.DataFrame:
     """Fetches historical candles from Jan 1 of current year to Date via FxPro container."""
-    mt5_inst = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
+    mt5_inst, _ = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
     if mt5_inst is None or not mt5_inst.initialize():
         raise RuntimeError("Failed to connect to FxPro MT5 container")
     
@@ -47,7 +47,7 @@ def fetch_year_to_date_ohlc_mt5(symbol: str, timeframe: int) -> pd.DataFrame:
 
 def fetch_ohlc_mt5(symbol: str, timeframe_minutes: int = 15, count: int = 200) -> pd.DataFrame:
     """Fetches historical rates over RPyC and constructs a clean pandas DataFrame."""
-    mt5_fxpro = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
+    mt5_fxpro, _ = get_container_mt5("FXPRO_HOST", "mt5-fxpro", "FXPRO_PORT", 8001)
     if mt5_fxpro is None or not mt5_fxpro.initialize():
         raise RuntimeError("Primary MT5 container connection unavailable")
 
