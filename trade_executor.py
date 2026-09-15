@@ -175,8 +175,13 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
 
         log.info(f"[{broker_name}] Sending request: {request}")
 
-        # ---- pass the plain dict directly; rpyc will pickle it ----
-        result = mt5_inst.order_send(request)
+        # KEYWORD arg required by rpyc + MT5 C extension
+        result = mt5_inst.order_send(request=request)
+
+        # If you still get (-2, 'Unnamed arguments not allowed'), use this
+        # instead of the line above:
+        #   remote_request = conn.builtins.dict(request)
+        #   result = mt5_inst.order_send(request=remote_request)
 
         if result is None:
             err = mt5_inst.last_error()
