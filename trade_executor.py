@@ -61,7 +61,7 @@ def get_current_price_mt5(symbol: str) -> tuple[float, float]:
             try: conn.close()
             except Exception: pass
 
-def execute_container_trade(broker_name: str, config: dict, symbol: str, direction: str, volume: float, sl: float, tp: float) -> bool:
+def execute_container_trade(broker_name, config, symbol, direction, volume, sl, tp):
     mt5_inst, conn = get_container_mt5(
         config["host_env"], config["default_host"],
         config["port_env"], config["default_port"]
@@ -76,14 +76,24 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             return False
 
         broker_symbol = str(config["symbols"].get(symbol.upper(), symbol))
-        
+
         if not mt5_inst.symbol_select(broker_symbol, True):
-            log.error(f"[{broker_name}] Failed to select symbol '{broker_symbol}' in Market Watch.")
+            log.error(f"[{broker_name}] Failed to select symbol '{broker_symbol}'.")
             return False
 
         symbol_info = mt5_inst.symbol_info(broker_symbol)
         if symbol_info is None:
-            log.error(f"[{broker_name}] Failed to find symbol info for {broker_symbol}")
+            log.error(f"[{broker_name}] No symbol_info for {broker_symbol}")
+            return False
+
+        # ---- NEW: verify symbol is tradeable ----
+        # SYMBOL_TRADE_MODE_FULL = 4
+        trade_mode = int(getattr(symbol_info, "trade_mode", -1))
+        if trade_mode not in (4,):  # 4 == full trading
+            log.error(
+                f"[{broker_name}] Symbol {broker_symbol} not fully tradeable "
+                f"(trade_mode={trade_mode})."
+            )
             return False
 
         tick = mt5_inst.symbol_info_tick(broker_symbol)
@@ -95,8 +105,8 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         point = float(symbol_info.point)
         stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
-        # Normalize volume
-        vol_step = float(getattr(symbol_info, "volume_step", 0.01))
+        # ---- volume normalization (unchanged) ----
+        vol_step = float(getattr(symbol_info, "volume_step", 0.01)) or 0.01
         vol_min = float(getattr(symbol_info, "volume_min", 0.01))
         volume = max(vol_min, round(volume / vol_step) * vol_step)
 
@@ -104,22 +114,22 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             order_type = int(mt5_inst.ORDER_TYPE_BUY)
             price = float(tick.ask)
             if sl >= price:
-                sl = price - (1.0 if point == 0.01 else 100 * point)
+                sl = price - 1.0
             if (price - sl) < stop_level:
                 sl = price - stop_level - (10 * point)
             if tp <= price:
-                tp = price + (1.0 if point == 0.01 else 100 * point)
+                tp = price + 1.0
             if (tp - price) < stop_level:
                 tp = price + stop_level + (10 * point)
         else:
             order_type = int(mt5_inst.ORDER_TYPE_SELL)
             price = float(tick.bid)
             if sl <= price:
-                sl = price + (1.0 if point == 0.01 else 100 * point)
+                sl = price + 1.0
             if (sl - price) < stop_level:
                 sl = price + stop_level + (10 * point)
             if tp >= price:
-                tp = price - (1.0 if point == 0.01 else 100 * point)
+                tp = price - 1.0
             if (price - tp) < stop_level:
                 tp = price - stop_level - (10 * point)
 
@@ -128,51 +138,62 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         tp = float(f"{tp:.{digits}f}")
         volume = float(f"{volume:.2f}")
 
-        # Cycle through supported broker filling modes
-        possible_fillings = [
-            int(getattr(mt5_inst, "ORDER_FILLING_IOC", 1)),
-            int(getattr(mt5_inst, "ORDER_FILLING_FOK", 0)),
-            int(getattr(mt5_inst, "ORDER_FILLING_RETURN", 2)),
-        ]
+        # ---- NEW: choose filling mode from symbol_info.filling_mode ----
+        SYMBOL_FILLING_FOK = int(getattr(mt5_inst, "SYMBOL_FILLING_FOK", 1))
+        SYMBOL_FILLING_IOC = int(getattr(mt5_inst, "SYMBOL_FILLING_IOC", 2))
 
-        result = None
-        last_request = {}
+        filling_mode = int(getattr(symbol_info, "filling_mode", 0))
+        log.info(f"[{broker_name}] symbol={broker_symbol} filling_mode={filling_mode}")
 
-        for fill_type in possible_fillings:
-            request = {
-                "action": int(mt5_inst.TRADE_ACTION_DEAL),
-                "symbol": str(broker_symbol),
-                "volume": float(volume),
-                "type": int(order_type),
-                "price": float(price),  # MUST pass current ask/bid price
-                "sl": float(sl),
-                "tp": float(tp),
-                "deviation": int(20),
-                "magic": int(888999),
-                "comment": str("Wickless Bot Multi-Account"),
-                "type_filling": int(fill_type),
-            }
-            last_request = request
+        if filling_mode & SYMBOL_FILLING_FOK:
+            type_filling = int(mt5_inst.ORDER_FILLING_FOK)
+        elif filling_mode & SYMBOL_FILLING_IOC:
+            type_filling = int(mt5_inst.ORDER_FILLING_IOC)
+        else:
+            # Neither FOK nor IOC -> this symbol can only be traded with
+            # ORDER_FILLING_RETURN, but only for *pending* orders. A market
+            # order on this symbol will not be possible.
+            log.error(
+                f"[{broker_name}] Symbol {broker_symbol} supports neither FOK "
+                f"nor IOC filling; market order not possible."
+            )
+            return False
 
-            remote_request = conn.builtins.dict(request)
-            result = mt5_inst.order_send(request=remote_request)
-            
-            # Stop if trade was successful
-            if result is not None and getattr(result, 'retcode', None) == mt5_inst.TRADE_RETCODE_DONE:
-                break
+        request = {
+            "action": int(mt5_inst.TRADE_ACTION_DEAL),
+            "symbol": broker_symbol,
+            "volume": float(volume),
+            "type": int(order_type),
+            "price": float(price),
+            "sl": float(sl),
+            "tp": float(tp),
+            "deviation": 20,
+            "magic": 888999,
+            "comment": "WicklessBot",
+            "type_filling": type_filling,
+        }
+
+        log.info(f"[{broker_name}] Sending request: {request}")
+
+        # ---- pass the plain dict directly; rpyc will pickle it ----
+        result = mt5_inst.order_send(request)
 
         if result is None:
             err = mt5_inst.last_error()
-            log.error(f"❌ [{broker_name}] Order Failed! mt5.order_send returned None. MT5 Error: {err}")
+            log.error(f"❌ [{broker_name}] order_send returned None. last_error={err}")
             return False
 
-        if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
-            ret_code = getattr(result, 'retcode', 'None')
-            ret_comment = getattr(result, 'comment', 'No Response')
-            log.error(f"❌ [{broker_name}] Order Rejected! Retcode: {ret_code} | Reason: {ret_comment} | request={last_request}")
+        if int(getattr(result, "retcode", -1)) != int(mt5_inst.TRADE_RETCODE_DONE):
+            log.error(
+                f"❌ [{broker_name}] Rejected | retcode={result.retcode} "
+                f"| comment={getattr(result, 'comment', '')} | request={request}"
+            )
             return False
 
-        log.info(f"🚀 [{broker_name}] Order Executed! Ticket: #{result.order} | {direction.upper()} {volume} lots @ {price}")
+        log.info(
+            f"🚀 [{broker_name}] Filled! ticket=#{result.order} "
+            f"{direction.upper()} {volume} @ {result.price}"
+        )
         return True
 
     finally:
