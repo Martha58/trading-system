@@ -19,7 +19,7 @@ BROKER_CONFIGS = {
     "NairaFunded": {
         "host_env": "NAIRAFUNDED_HOST", "default_host": "mt5-nairafunded",
         "port_env": "NAIRAFUNDED_PORT", "default_port": 8001,
-        "symbols": {"GOLD": "GOLD", "SILVER": "XAGUSD"}  # Adjust if NairaFunded uses XAUUSD instead of XAUUSDm
+        "symbols": {"GOLD": "GOLD", "SILVER": "SILVER"}  # Adjust if NairaFunded uses XAUUSD instead of XAUUSDm
     },
     "NairaTrader": {
         "host_env": "NAIRATRADER_HOST", "default_host": "mt5-nairatrader",
@@ -78,15 +78,8 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
             log.error(f"[{broker_name}] MT5 Initialization failed.")
             return False
 
-        # Verify MT5 Terminal is logged into an account
-        account_info = mt5_inst.account_info()
-        if account_info is None:
-            log.error(f"[{broker_name}] MT5 Terminal is NOT logged into an active trading account!")
-            return False
-
-        broker_symbol = config["symbols"].get(symbol.upper(), symbol)
+        broker_symbol = str(config["symbols"].get(symbol.upper(), symbol))
         
-        # Select symbol in Market Watch to force tick stream initialization
         if not mt5_inst.symbol_select(broker_symbol, True):
             log.error(f"[{broker_name}] Failed to select symbol {broker_symbol} in Market Watch.")
             return False
@@ -106,52 +99,63 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
         stop_level = float(getattr(symbol_info, "trade_stops_level", 0)) * point
 
         if direction == "long":
-            order_type = mt5_inst.ORDER_TYPE_BUY
+            order_type = int(mt5_inst.ORDER_TYPE_BUY)
             price = float(tick.ask)
             if sl >= price:
                 sl = price - (1.0 if point == 0.01 else 100 * point)
             if (price - sl) < stop_level:
                 sl = price - stop_level - (10 * point)
         else:
-            order_type = mt5_inst.ORDER_TYPE_SELL
+            order_type = int(mt5_inst.ORDER_TYPE_SELL)
             price = float(tick.bid)
             if sl <= price:
                 sl = price + (1.0 if point == 0.01 else 100 * point)
             if (sl - price) < stop_level:
                 sl = price + stop_level + (10 * point)
 
-        price = round(price, digits)
-        sl = round(sl, digits)
-        tp = round(tp, digits)
+        price = float(round(price, digits))
+        sl = float(round(sl, digits))
+        tp = float(round(tp, digits))
 
-        filling_mode = int(symbol_info.filling_mode)
+        # HARDENED FILLING MODE SELECTION
+        filling_mode = int(getattr(symbol_info, "filling_mode", 0))
         if filling_mode & 1:
-            filling_type = mt5_inst.ORDER_FILLING_FOK
+            filling_type = int(mt5_inst.ORDER_FILLING_FOK)
         elif filling_mode & 2:
-            filling_type = mt5_inst.ORDER_FILLING_IOC
+            filling_type = int(mt5_inst.ORDER_FILLING_IOC)
         else:
-            filling_type = mt5_inst.ORDER_FILLING_RETURN
+            # Fallback for FxPro / CFD brokers
+            filling_type = int(getattr(mt5_inst, "ORDER_FILLING_RETURN", 2))
 
+        # CONSTRUCT EXPLICIT NATIVE REQUEST DICTIONARY
         request = {
-            "action": mt5_inst.TRADE_ACTION_DEAL,
+            "action": int(mt5_inst.TRADE_ACTION_DEAL),
             "symbol": str(broker_symbol),
             "volume": float(volume),
-            "type": order_type,
+            "type": int(order_type),
             "price": float(price),
             "sl": float(sl),
             "tp": float(tp),
-            "deviation": 20,
-            "magic": 888999,
+            "deviation": int(20),
+            "magic": int(888999),
             "comment": "Wickless Bot Multi-Account",
-            "type_time": mt5_inst.ORDER_TIME_GTC,
-            "type_filling": filling_type,
+            "type_time": int(mt5_inst.ORDER_TIME_GTC),
+            "type_filling": int(filling_type),
         }
 
+        # Convert local dict to remote RPyC dict object
         remote_request = conn.builtins.dict(request)
         result = mt5_inst.order_send(remote_request)
 
         if result is None:
-            log.error(f"❌ [{broker_name}] Order Failed! mt5.order_send returned None. (Check account login & trading permissions)")
+            # RETRY WITH ALTERNATIVE FILLING TYPE IF FIRST ATTEMPT RETURNS NONE
+            log.warning(f"⚠️ [{broker_name}] First order_send returned None. Retrying with ORDER_FILLING_IOC...")
+            request["type_filling"] = int(getattr(mt5_inst, "ORDER_FILLING_IOC", 1))
+            remote_request = conn.builtins.dict(request)
+            result = mt5_inst.order_send(remote_request)
+
+        if result is None:
+            log.error(f"❌ [{broker_name}] Order Failed! mt5.order_send returned None on retry. Check account trade permission/investor password.")
             return False
 
         if getattr(result, 'retcode', None) != mt5_inst.TRADE_RETCODE_DONE:
@@ -162,6 +166,7 @@ def execute_container_trade(broker_name: str, config: dict, symbol: str, directi
 
         log.info(f"🚀 [{broker_name}] Order Executed! Ticket: #{result.order} | {direction.upper()} {volume} lots @ {price}")
         return True
+
     finally:
         if conn:
             try: conn.close()
