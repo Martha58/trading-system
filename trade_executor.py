@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import logging
 import rpyc
@@ -24,6 +25,16 @@ BROKER_CONFIGS = {
     "NairaTrader": {
         "host_env": "NAIRATRADER_HOST", "default_host": "mt5-nairatrader",
         "port_env": "NAIRATRADER_PORT", "default_port": 8001,
+        "symbols": {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
+    },
+    "Exness": {
+        "host_env": "EXNESS_HOST", "default_host": "mt5-exness",
+        "port_env": "EXNESS_PORT", "default_port": 8001,
+        "symbols": {"GOLD": "XAUUSDm", "SILVER": "XAGUSDm"}
+    },
+    "PuPrime": {
+        "host_env": "PUPRIME_HOST", "default_host": "mt5-puprime",
+        "port_env": "PUPRIME_PORT", "default_port": 8001,
         "symbols": {"GOLD": "XAUUSD.s", "SILVER": "XAGUSD.s"}
     }
 }
@@ -51,20 +62,9 @@ def _remote_order_send(conn, request_dict):
     """
     Execute MetaTrader5.order_send(...) on the remote (Wine) side, forcing
     the request to arrive as a *native* Python dict instead of an rpyc netref.
-
-    We build an expression that:
-      1. JSON-decodes a string we pass over the wire,
-      2. Calls MetaTrader5.order_send on the resulting native dict,
-      3. Returns a plain tuple of the fields we care about.
-
-    Sending the request as a JSON string sidesteps rpyc's proxy-based
-    argument marshalling entirely. The MT5 C extension on the remote side
-    receives a real dict, exactly as if it were called locally.
     """
     request_json = json.dumps(request_dict)
 
-    # Single expression (rpyc classic .eval() only accepts expressions).
-    # repr() produces a safe Python string literal for the JSON payload.
     expr = (
         "(lambda r: "
         "(r.retcode, r.order, r.deal, r.price, r.comment) if r is not None "
@@ -140,7 +140,27 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
             )
             return False
 
-        tick = mt5_inst.symbol_info_tick(broker_symbol)
+        # ------------------------------------------------------------------
+        # Wait for a valid tick. Exness, PuPrime, and other brokers with
+        # suffixed symbols (XAUUSDm, XAUUSD.s) return bid=0/ask=0 for a
+        # short window after symbol_select while the terminal subscribes
+        # to the feed. Without this loop, price becomes 0.0 and the SL/TP
+        # checks collapse into nonsense (sl=-1.0), producing 10016.
+        # ------------------------------------------------------------------
+        tick = None
+        for attempt in range(10):
+            tick = mt5_inst.symbol_info_tick(broker_symbol)
+            if tick is not None and float(tick.bid) > 0.0 and float(tick.ask) > 0.0:
+                break
+            time.sleep(0.3)
+        else:
+            log.error(
+                f"[{broker_name}] No live tick for {broker_symbol} after 3s "
+                f"(last bid={getattr(tick,'bid',None)} ask={getattr(tick,'ask',None)}). "
+                f"Confirm the symbol is in Market Watch inside the container."
+            )
+            return False
+
         if tick is None:
             log.error(f"[{broker_name}] Tick fetch failed for {broker_symbol}")
             return False
@@ -176,6 +196,14 @@ def execute_container_trade(broker_name, config, symbol, direction, volume, sl, 
                 tp = price - 1.0
             if (price - tp) < stop_level:
                 tp = price - stop_level - (10 * point)
+
+        # Hard guard: never send a request with price <= 0
+        if price <= 0.0:
+            log.error(
+                f"[{broker_name}] Aborting: price is zero for {broker_symbol} "
+                f"(bid={tick.bid}, ask={tick.ask})"
+            )
+            return False
 
         price = float(f"{price:.{digits}f}")
         sl = float(f"{sl:.{digits}f}")

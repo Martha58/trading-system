@@ -38,6 +38,32 @@ services:
     volumes:
       - ./mt5_nairatrader_data:/config
 
+  mt5-exness:
+    image: gmag11/metatrader5_vnc:latest
+    container_name: mt5_exness           
+    restart: always
+    ports:
+      - "3003:3000"
+      - "8004:18812"
+    environment:
+      - CUSTOM_USER=${CONTAINER_USER:-abc}
+      - PASSWORD=${VNC_PASSWORD:-password}
+    volumes:
+      - ./mt5_exness_data:/config
+
+  mt5-puprime:
+    image: gmag11/metatrader5_vnc:latest
+    container_name: mt5_puprime
+    restart: always
+    ports:
+      - "3004:3000"
+      - "8005:18812"
+    environment:
+      - CUSTOM_USER=${CONTAINER_USER:-abc}
+      - PASSWORD=${VNC_PASSWORD:-password}
+    volumes:
+      - ./mt5_puprime_data:/config
+
   trading-bot:
     build: .
     container_name: wickless_bot
@@ -48,6 +74,8 @@ services:
       - mt5-fxpro
       - mt5-nairafunded
       - mt5-nairatrader
+      - mt5-exness
+      - mt5-puprime
     environment:
       - FXPRO_HOST=mt5-fxpro
       - FXPRO_PORT=8001
@@ -55,3 +83,7 @@ services:
       - NAIRAFUNDED_PORT=8001
       - NAIRATRADER_HOST=mt5-nairatrader
       - NAIRATRADER_PORT=8001
+      - EXNESS_HOST=mt5-exness
+      - EXNESS_PORT=8001
+      - PUPRIME_HOST=mt5-puprime
+      - PUPRIME_PORT=8001
